@@ -26,6 +26,9 @@ type Pinger struct {
 	sourceAddr string
 	addr       string
 	ipaddr     *net.IPAddr
+
+	Count    int
+	Interval time.Duration
 }
 
 func (p *Pinger) SetAddr(addr string) error {
@@ -45,7 +48,7 @@ func (p *Pinger) SetIPAddr(ipaddr *net.IPAddr) {
 }
 func (p *Pinger) IPAddr() *net.IPAddr { return p.ipaddr }
 
-func (p *Pinger) Run(count int) {
+func (p *Pinger) Run() {
 	conn, err := icmp.ListenPacket("ip4:icmp", p.sourceAddr)
 	if err != nil {
 		fmt.Printf("ListenPacket error %s\n", err)
@@ -87,24 +90,24 @@ func (p *Pinger) Run(count int) {
 			},
 		}).Marshal(nil)
 		if err != nil {
-			time.Sleep(time.Second * 10)
+			time.Sleep(p.Interval)
 			continue
 		}
 
 		_, err = conn.WriteTo(bytes, p.ipaddr)
 		// length, err := conn.WriteTo(bytes, &net.IPAddr{IP: net.IPv4(192, 168, 1, 93)})
 		if err != nil {
-			time.Sleep(time.Second * 10)
+			time.Sleep(p.Interval)
 			continue
 		}
 
 		wg.Add(1)
 		i++
-		if i == count {
+		if i == p.Count {
 			break
 		}
 
-		time.Sleep(time.Second * 10)
+		time.Sleep(p.Interval)
 	}
 	wg.Wait()
 }
@@ -121,10 +124,14 @@ Examples:
 
     # ping google 5 times
     ping -c 5 www.google.com
+
+    # ping google 5 times at 500ms intervals
+    ping -c 5 -i 500ms www.google.com
 `
 
 func main() {
-	count := flag.Int("c", -1, "ping how many times")
+	count := flag.Int("c", -1, "")
+	interval := flag.Duration("i", time.Second, "")
 	flag.Usage = func() {
 		fmt.Printf(usage)
 	}
@@ -141,8 +148,10 @@ func main() {
 		return
 	}
 
+	pinger.Count = *count
+	pinger.Interval = *interval
 	fmt.Printf("PING %s (%s) count=%d:\n", pinger.Addr(), pinger.IPAddr(), *count)
-	pinger.Run(*count)
+	pinger.Run()
 }
 
 func timeToBytes(t time.Time) []byte {
