@@ -1,3 +1,5 @@
+// TODO
+// handle panic: interface conversion: icmp.MessageBody is *icmp.DstUnreach, not *icmp.Echo
 package main
 
 import (
@@ -7,6 +9,7 @@ import (
 	"golang.org/x/net/ipv4"
 	"math/rand"
 	"net"
+	"sync"
 	"time"
 )
 
@@ -42,12 +45,13 @@ func (p *Pinger) SetIPAddr(ipaddr *net.IPAddr) {
 }
 func (p *Pinger) IPAddr() *net.IPAddr { return p.ipaddr }
 
-func (p *Pinger) Run() {
+func (p *Pinger) Run(count int) {
 	conn, err := icmp.ListenPacket("ip4:icmp", p.sourceAddr)
 	if err != nil {
 		fmt.Printf("ListenPacket error %s\n", err)
 		return
 	}
+	wg := sync.WaitGroup{}
 
 	// 不断 发送和接收
 	// 接收
@@ -67,10 +71,12 @@ func (p *Pinger) Run() {
 			pkt := rm.Body.(*icmp.Echo)
 			Rtt := time.Since(bytesToTime(pkt.Data[:8]))
 			fmt.Printf("RTT is %s\n", Rtt)
+			wg.Done()
 		}
 	}()
 
 	// 发送
+	i := 0
 	for {
 		bytes, err := (&icmp.Message{
 			Type: ipv4.ICMPTypeEcho, Code: 0,
@@ -92,19 +98,33 @@ func (p *Pinger) Run() {
 			continue
 		}
 
+		wg.Add(1)
+		i++
+		if i == count {
+			break
+		}
+
 		time.Sleep(time.Second * 10)
 	}
+	wg.Wait()
 }
 
 var usage = `
 Usage:
+
     ping host
+
 Examples:
+
     # ping google continuously
     ping www.google.com
+
+    # ping google 5 times
+    ping -c 5 www.google.com
 `
 
 func main() {
+	count := flag.Int("c", -1, "ping how many times")
 	flag.Usage = func() {
 		fmt.Printf(usage)
 	}
@@ -121,8 +141,8 @@ func main() {
 		return
 	}
 
-	fmt.Printf("PING %s (%s):\n", pinger.Addr(), pinger.IPAddr())
-	pinger.Run()
+	fmt.Printf("PING %s (%s) count=%d:\n", pinger.Addr(), pinger.IPAddr(), *count)
+	pinger.Run(*count)
 }
 
 func timeToBytes(t time.Time) []byte {
