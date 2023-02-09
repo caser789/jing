@@ -30,6 +30,7 @@ type Pinger struct {
 
 	Count    int
 	Interval time.Duration
+	Timeout  time.Duration
 }
 
 func (p *Pinger) SetAddr(addr string) error {
@@ -84,8 +85,11 @@ func (p *Pinger) Run() {
 
 	_ = p.sendICMP(conn)
 	interval := time.NewTicker(p.Interval)
+	timeout := time.NewTicker(p.Timeout)
 	for {
 		select {
+		case <-timeout.C:
+			return
 		case <-interval.C:
 			_ = p.sendICMP(conn)
 		case <-closed:
@@ -126,11 +130,15 @@ Examples:
 
     # ping google 5 times at 500ms intervals
     ping -c 5 -i 500ms www.google.com
+
+    # ping google for 10 seconds
+    ping -t 10s www.google.com
 `
 
 func main() {
 	count := flag.Int("c", -1, "")
 	interval := flag.Duration("i", time.Second, "")
+	timeout := flag.Duration("t", time.Second*100000, "")
 	flag.Usage = func() {
 		fmt.Printf(usage)
 	}
@@ -149,6 +157,7 @@ func main() {
 
 	pinger.Count = *count
 	pinger.Interval = *interval
+	pinger.Timeout = *timeout
 	fmt.Printf("PING %s (%s) count=%d:\n", pinger.Addr(), pinger.IPAddr(), *count)
 	pinger.Run()
 }
