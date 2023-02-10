@@ -17,8 +17,11 @@ import (
 	"time"
 )
 
+const UDP = "udp"
+const IP = "ip"
+
 func NewPinger(host string) (*Pinger, error) {
-	p := &Pinger{stat: &Stat{}}
+	p := &Pinger{stat: &Stat{}, network: UDP}
 	err := p.SetAddr(host)
 	if err != nil {
 		return nil, err
@@ -35,6 +38,7 @@ type Pinger struct {
 	stat *Stat
 
 	packetRecv int
+	network    string
 
 	Count    int
 	Interval time.Duration
@@ -57,6 +61,18 @@ func (p *Pinger) SetIPAddr(ipaddr *net.IPAddr) {
 	p.addr = ipaddr.String()
 }
 func (p *Pinger) IPAddr() *net.IPAddr { return p.ipaddr }
+
+func (p *Pinger) SetPrivileged(privileged bool) {
+	if privileged {
+		p.network = IP
+	} else {
+		p.network = UDP
+	}
+}
+
+func (p *Pinger) Privileged() bool {
+	return p.network == IP
+}
 
 func (p *Pinger) finish() {
 	stat := p.Stat()
@@ -113,7 +129,12 @@ func (p *Pinger) Run() {
 	defer cancel()
 	defer p.finish()
 
-	conn, err := icmp.ListenPacket("ip4:icmp", p.sourceAddr)
+	var proto = "ip4:icmp"
+	if p.network == UDP {
+		proto = "udp4"
+	}
+
+	conn, err := icmp.ListenPacket(proto, p.sourceAddr)
 	if err != nil {
 		fmt.Printf("ListenPacket error %s\n", err)
 		return
@@ -128,8 +149,8 @@ func (p *Pinger) Run() {
 			if err != nil {
 				return
 			}
-
-			rm, err := icmp.ParseMessage(1, bytesGot[:n])
+			payload := ipv4Payload(bytesGot[:n])
+			rm, err := icmp.ParseMessage(1, payload)
 			if err != nil {
 				return
 			}
@@ -159,8 +180,7 @@ func (p *Pinger) Run() {
 	_ = p.sendICMP(conn)
 	interval := time.NewTicker(p.Interval)
 	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt)
-	signal.Notify(c, syscall.SIGTERM)
+	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	for {
 		select {
 		case <-c:
@@ -190,7 +210,11 @@ func (p *Pinger) sendICMP(conn *icmp.PacketConn) error {
 	p.seq++
 	p.stat.PacketsSent++
 
-	_, err = conn.WriteTo(bytes, p.ipaddr)
+	var dst net.Addr = p.ipaddr
+	if p.network == UDP {
+		dst = &net.UDPAddr{IP: p.ipaddr.IP, Zone: p.ipaddr.Zone}
+	}
+	_, err = conn.WriteTo(bytes, dst)
 	return err
 }
 
@@ -218,6 +242,7 @@ func main() {
 	count := flag.Int("c", -1, "")
 	interval := flag.Duration("i", time.Second, "")
 	timeout := flag.Duration("t", time.Second*100000, "")
+	privileged := flag.Bool("privileged", false, "")
 	flag.Usage = func() {
 		fmt.Printf(usage)
 	}
@@ -237,6 +262,7 @@ func main() {
 	pinger.Count = *count
 	pinger.Interval = *interval
 	pinger.Timeout = *timeout
+	pinger.SetPrivileged(*privileged)
 	fmt.Printf("PING %s (%s):\n", pinger.Addr(), pinger.IPAddr())
 	pinger.Run()
 }
@@ -256,4 +282,12 @@ func bytesToTime(b []byte) time.Time {
 		nsec += int64(b[i]) << ((7 - i) * 8)
 	}
 	return time.Unix(nsec/1000000000, nsec%1000000000)
+}
+
+func ipv4Payload(b []byte) []byte {
+	if len(b) < ipv4.HeaderLen {
+		return b
+	}
+	hdrlen := int(b[0]&0x0f) << 2
+	return b[hdrlen:]
 }
