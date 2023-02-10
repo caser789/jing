@@ -21,7 +21,11 @@ const UDP = "udp"
 const IP = "ip"
 
 func NewPinger(host string) (*Pinger, error) {
-	p := &Pinger{stat: &Stat{}, network: UDP}
+	p := &Pinger{
+		stat:    &Stat{},
+		network: UDP,
+		closed:  make(chan interface{}),
+	}
 	err := p.SetAddr(host)
 	if err != nil {
 		return nil, err
@@ -34,8 +38,9 @@ type Pinger struct {
 	addr       string
 	ipaddr     *net.IPAddr
 
-	seq  int
-	stat *Stat
+	seq    int
+	stat   *Stat
+	closed chan interface{}
 
 	packetRecv int
 	network    string
@@ -140,42 +145,8 @@ func (p *Pinger) Run() {
 		return
 	}
 
-	closed := make(chan interface{})
-
-	go func() {
-		for {
-			bytesGot := make([]byte, 512)
-			n, _, err := conn.ReadFrom(bytesGot)
-			if err != nil {
-				return
-			}
-			payload := ipv4Payload(bytesGot[:n])
-			rm, err := icmp.ParseMessage(1, payload)
-			if err != nil {
-				return
-			}
-
-			pkt := rm.Body.(*icmp.Echo)
-			Rtt := time.Since(bytesToTime(pkt.Data[:8]))
-			p.packetRecv++
-			p.stat.PacketsRecv++
-			p.stat.Rtts = append(p.stat.Rtts, Rtt)
-			if Rtt > p.stat.MaxRtt {
-				p.stat.MaxRtt = Rtt
-			}
-			if p.stat.MinRtt == 0 || Rtt < p.stat.MinRtt {
-				p.stat.MinRtt = Rtt
-			}
-			p.stat.SumRtt += Rtt
-			p.stat.AvgRtt = p.stat.SumRtt / time.Duration(len(p.stat.Rtts))
-			p.stat.SumSqrtRtt += (Rtt - p.stat.AvgRtt) * (Rtt - p.stat.AvgRtt)
-			fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v\n", n, p.ipaddr, pkt.Seq, Rtt)
-			if p.packetRecv == p.Count {
-				close(closed)
-				return
-			}
-		}
-	}()
+	recv := make(chan *packet, 5)
+	go p.recvICMP(conn, recv)
 
 	_ = p.sendICMP(conn)
 	interval := time.NewTicker(p.Interval)
@@ -188,9 +159,89 @@ func (p *Pinger) Run() {
 		case <-ctxTimeout.Done():
 			return
 		case <-interval.C:
-			_ = p.sendICMP(conn)
-		case <-closed:
+			err = p.sendICMP(conn)
+			if err != nil {
+				fmt.Println("FATAL: ", err.Error())
+			}
+		case r := <-recv:
+			err = p.processPacket(r)
+			if err != nil {
+				fmt.Println("FATAL: ", err.Error())
+			}
+		case <-p.closed:
 			return
+		}
+	}
+}
+
+type packet struct {
+	bytes  []byte
+	nbytes int
+}
+
+func (p *Pinger) processPacket(pkt *packet) error {
+	bytesGot := pkt.bytes
+	n := pkt.nbytes
+	payload := ipv4Payload(bytesGot[:n])
+	msg, err := icmp.ParseMessage(1, payload)
+	if err != nil {
+		return fmt.Errorf("error parsing icmp message")
+	}
+
+	if msg.Type != ipv4.ICMPTypeEchoReply {
+		// Not an echo reply, ignore it
+		return nil
+	}
+
+	echo, ok := msg.Body.(*icmp.Echo)
+	if !ok {
+		// Very bad, not sure how this can happen
+		return fmt.Errorf("error, invalid ICMP echo reply. Body type: %T, %s", echo, echo)
+	}
+
+	Rtt := time.Since(bytesToTime(echo.Data[:8]))
+	p.packetRecv++
+	p.stat.PacketsRecv++
+	p.stat.Rtts = append(p.stat.Rtts, Rtt)
+	if Rtt > p.stat.MaxRtt {
+		p.stat.MaxRtt = Rtt
+	}
+	if p.stat.MinRtt == 0 || Rtt < p.stat.MinRtt {
+		p.stat.MinRtt = Rtt
+	}
+	p.stat.SumRtt += Rtt
+	p.stat.AvgRtt = p.stat.SumRtt / time.Duration(len(p.stat.Rtts))
+	p.stat.SumSqrtRtt += (Rtt - p.stat.AvgRtt) * (Rtt - p.stat.AvgRtt)
+	fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v\n", n, p.ipaddr, echo.Seq, Rtt)
+
+	if p.packetRecv == p.Count {
+		close(p.closed)
+	}
+	return nil
+}
+
+func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet) {
+	for {
+		select {
+		case <-p.closed:
+			return
+		default:
+			bytesGot := make([]byte, 512)
+			_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
+			n, _, err := conn.ReadFrom(bytesGot)
+			if err != nil {
+				if neterr, ok := err.(*net.OpError); ok {
+					if neterr.Timeout() {
+						// Read timeout
+						continue
+					} else {
+						close(p.closed)
+						return
+					}
+				}
+			}
+
+			recv <- &packet{bytes: bytesGot, nbytes: n}
 		}
 	}
 }
