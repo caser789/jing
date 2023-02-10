@@ -136,7 +136,7 @@ func (p *Pinger) Run() {
 
 	conn, err := icmp.ListenPacket(proto, p.sourceAddr)
 	if err != nil {
-		fmt.Printf("ListenPacket error %s\n", err)
+		fmt.Printf("Error listening for ICMP packets: %s\n", err.Error())
 		return
 	}
 
@@ -207,15 +207,24 @@ func (p *Pinger) sendICMP(conn *icmp.PacketConn) error {
 	if err != nil {
 		return err
 	}
-	p.seq++
-	p.stat.PacketsSent++
 
 	var dst net.Addr = p.ipaddr
 	if p.network == UDP {
 		dst = &net.UDPAddr{IP: p.ipaddr.IP, Zone: p.ipaddr.Zone}
 	}
-	_, err = conn.WriteTo(bytes, dst)
-	return err
+	for {
+		if _, err := conn.WriteTo(bytes, dst); err != nil {
+			if neterr, ok := err.(*net.OpError); ok {
+				if neterr.Err == syscall.ENOBUFS {
+					continue
+				}
+			}
+		}
+		p.seq++
+		p.stat.PacketsSent++
+		break
+	}
+	return nil
 }
 
 var usage = `
