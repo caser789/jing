@@ -48,6 +48,12 @@ type Pinger struct {
 	Count    int
 	Interval time.Duration
 	Timeout  time.Duration
+
+	// OnRecv is called when Pinger receives and processes a packet
+	OnRecv func(*Packet)
+
+	// OnFinish is called when Pinger exits
+	OnFinish func(*Stat)
 }
 
 func (p *Pinger) SetAddr(addr string) error {
@@ -80,10 +86,10 @@ func (p *Pinger) Privileged() bool {
 }
 
 func (p *Pinger) finish() {
-	stat := p.Stat()
-	fmt.Printf("\n--- %s ping statistics ---\n", p.Addr())
-	fmt.Printf("%d packets transmitted, %d packets received, %v%% packet loss\n", stat.PacketsSent, stat.PacketsRecv, stat.PacketLoss)
-	fmt.Printf("round-trip min/avg/max/stddev = %v/%v/%v/%v\n", stat.MinRtt, stat.AvgRtt, stat.MaxRtt, stat.StdDevRtt)
+	handler := p.OnFinish
+	if handler != nil {
+		handler(p.Stat())
+	}
 }
 
 // Stat represent the stats of a currently running or finished
@@ -212,7 +218,16 @@ func (p *Pinger) processPacket(pkt *packet) error {
 	p.stat.SumRtt += Rtt
 	p.stat.AvgRtt = p.stat.SumRtt / time.Duration(len(p.stat.Rtts))
 	p.stat.SumSqrtRtt += (Rtt - p.stat.AvgRtt) * (Rtt - p.stat.AvgRtt)
-	fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v\n", n, p.ipaddr, echo.Seq, Rtt)
+
+	handler := p.OnRecv
+	if handler != nil {
+		handler(&Packet{
+			Rtt:    Rtt,
+			IPAddr: p.ipaddr,
+			Nbytes: n,
+			Seq:    echo.Seq,
+		})
+	}
 
 	if p.packetRecv == p.Count {
 		close(p.closed)
@@ -323,8 +338,34 @@ func main() {
 	pinger.Interval = *interval
 	pinger.Timeout = *timeout
 	pinger.SetPrivileged(*privileged)
+	pinger.OnRecv = func(pkt *Packet) {
+		fmt.Printf("%d bytes from %s: icmp_seq=%d time=%v\n",
+			pkt.Nbytes, pkt.IPAddr, pkt.Seq, pkt.Rtt)
+	}
+	pinger.OnFinish = func(stats *Stat) {
+		fmt.Printf("\n--- %s ping statistics ---\n", pinger.Addr())
+		fmt.Printf("%d packets transmitted, %d packets received, %v%% packet loss\n",
+			stats.PacketsSent, stats.PacketsRecv, stats.PacketLoss)
+		fmt.Printf("round-trip min/avg/max/stddev = %v/%v/%v/%v\n",
+			stats.MinRtt, stats.AvgRtt, stats.MaxRtt, stats.StdDevRtt)
+	}
 	fmt.Printf("PING %s (%s):\n", pinger.Addr(), pinger.IPAddr())
 	pinger.Run()
+}
+
+// Packet represents a received and processed ICMP echo packet.
+type Packet struct {
+	// Rtt is the round-trip time it took to ping.
+	Rtt time.Duration
+
+	// IPAddr is the address of the host being pinged.
+	IPAddr *net.IPAddr
+
+	// NBytes is the number of bytes in the message.
+	Nbytes int
+
+	// Seq is the ICMP sequence number.
+	Seq int
 }
 
 func timeToBytes(t time.Time) []byte {
