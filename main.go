@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -152,7 +153,9 @@ func (p *Pinger) Run() {
 	}
 
 	recv := make(chan *packet, 5)
-	go p.recvICMP(conn, recv)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go p.recvICMP(conn, recv, &wg)
 
 	_ = p.sendICMP(conn)
 	interval := time.NewTicker(p.Interval)
@@ -161,9 +164,12 @@ func (p *Pinger) Run() {
 	for {
 		select {
 		case <-c:
+			close(p.closed)
+		case <-p.closed:
+			wg.Wait()
 			return
 		case <-ctxTimeout.Done():
-			return
+			close(p.closed)
 		case <-interval.C:
 			err = p.sendICMP(conn)
 			if err != nil {
@@ -174,8 +180,6 @@ func (p *Pinger) Run() {
 			if err != nil {
 				fmt.Println("FATAL: ", err.Error())
 			}
-		case <-p.closed:
-			return
 		}
 	}
 }
@@ -235,7 +239,8 @@ func (p *Pinger) processPacket(pkt *packet) error {
 	return nil
 }
 
-func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet) {
+func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet, wg *sync.WaitGroup) {
+	defer wg.Done()
 	for {
 		select {
 		case <-p.closed:
