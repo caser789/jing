@@ -1,4 +1,4 @@
-module jing
+module github.com/caser789/jing
 
 go 1.17
 
