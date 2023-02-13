@@ -1,4 +1,4 @@
-# go-ping
+# jing
 [![GoDoc](https://godoc.org/github.com/caser789/jing?status.svg)](https://godoc.org/github.com/caser789/jing)
 
 ICMP Ping library for Go, inspired by
@@ -57,7 +57,7 @@ $GOPATH/bin/ping
 This library attempts to send an
 "unprivileged" ping via UDP. On linux, this must be enabled by setting
 ```
-sysctl net.ipv4.ping_group_range=0
+sudo sysctl -w net.ipv4.ping_group_range="0   2147483647"
 ```
 >       ping_group_range (two integers; default: see below; since Linux
 >       2.6.39)
@@ -66,6 +66,12 @@ sysctl net.ipv4.ping_group_range=0
 >              The default is "1 0", which means no group is allowed to
 >              create ICMP Echo sockets.
 * [ICMP man page](https://man7.org/linux/man-pages/man7/icmp.7.html)
+use setcap to allow your binary using go-ping to bind to raw sockets
+(or just run as super-user):
+
+```
+setcap cap_net_raw=+ep /bin/jing-binary
+```
 If you do not wish to do this, you can set `pinger.SetPrivileged(true)` and
 run as super-user.
 See [this blog](https://sturmflut.github.io/linux/ubuntu/2015/01/17/unprivileged-icmp-sockets-on-linux/)
