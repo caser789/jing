@@ -203,7 +203,7 @@ func (p *Pinger) processPacket(pkt *packet) error {
 	echo, ok := msg.Body.(*icmp.Echo)
 	if !ok {
 		// Very bad, not sure how this can happen
-		return fmt.Errorf("error, invalid ICMP echo reply. Body type: %T, %s", echo, echo)
+		return fmt.Errorf("error, invalid ICMP echo reply. Body type: %T, %v", echo, echo)
 	}
 
 	Rtt := time.Since(bytesToTime(echo.Data[:8]))
@@ -333,4 +333,12 @@ func ipv4Payload(b []byte) []byte {
 	}
 	hdrlen := int(b[0]&0x0f) << 2
 	return b[hdrlen:]
+}
+
+func isIPv4(ip net.IP) bool {
+	return len(ip.To4()) == net.IPv4len
+}
+
+func isIPv6(ip net.IP) bool {
+	return len(ip) == net.IPv6len
 }
