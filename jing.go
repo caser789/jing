@@ -18,12 +18,13 @@ const UDP = "udp"
 const IP = "ip"
 
 func NewPinger(host string) (*Pinger, error) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
 	p := &Pinger{
 		stat:    &Stat{},
 		network: UDP,
 		closed:  make(chan interface{}),
-		id:      rand.Intn(math.MaxInt16),
-		tracker: rand.Int63n(math.MaxInt64),
+		id:      r.Intn(math.MaxInt16),
+		tracker: r.Int63n(math.MaxInt64),
 	}
 	err := p.SetAddr(host)
 	if err != nil {
