@@ -2,6 +2,7 @@ package jing
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
@@ -21,7 +22,8 @@ func NewPinger(host string) (*Pinger, error) {
 		stat:    &Stat{},
 		network: UDP,
 		closed:  make(chan interface{}),
-		id:      rand.Intn(0xffff),
+		id:      rand.Intn(math.MaxInt16),
+		tracker: rand.Int63n(math.MaxInt64),
 	}
 	err := p.SetAddr(host)
 	if err != nil {
@@ -35,10 +37,11 @@ type Pinger struct {
 	addr       string
 	ipaddr     *net.IPAddr
 
-	id     int
-	seq    int
-	stat   *Stat
-	closed chan interface{}
+	id      int
+	tracker int64
+	seq     int
+	stat    *Stat
+	closed  chan interface{}
 
 	packetRecv int
 	network    string
@@ -205,12 +208,26 @@ func (p *Pinger) processPacket(pkt *packet) error {
 		// Very bad, not sure how this can happen
 		return fmt.Errorf("error, invalid ICMP echo reply. Body type: %T, %v", echo, echo)
 	}
-	// Check if reply from same ID
-	if echo.ID != p.id {
-		return nil
+	data := IcmpData{}
+	err = json.Unmarshal(echo.Data, &data)
+	if err != nil {
+		return err
+	}
+	// If we are priviledged, we can match icmp.ID
+	if p.network == IP {
+		// Check if reply from same ID
+		if echo.ID != p.id {
+			return nil
+		}
+	} else {
+		// If we are not priviledged, we cannot set ID - require kernel ping_table map
+		// need to use contents to identify packet
+		if data.Tracker != p.tracker {
+			return nil
+		}
 	}
 
-	Rtt := time.Since(bytesToTime(echo.Data[:8]))
+	Rtt := time.Since(bytesToTime(data.Bytes))
 	p.packetRecv++
 	p.stat.PacketsRecv++
 	p.stat.Rtts = append(p.stat.Rtts, Rtt)
@@ -267,15 +284,27 @@ func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet, wg *sync.W
 	}
 }
 
+type IcmpData struct {
+	Bytes   []byte
+	Tracker int64
+}
+
 func (p *Pinger) sendICMP(conn *icmp.PacketConn) error {
-	bytes, err := (&icmp.Message{
-		Type: ipv4.ICMPTypeEcho, Code: 0,
-		Body: &icmp.Echo{
-			ID:   p.id,
-			Seq:  p.seq,
-			Data: timeToBytes(time.Now()),
-		},
-	}).Marshal(nil)
+	data, err := json.Marshal(IcmpData{Bytes: timeToBytes(time.Now()), Tracker: p.tracker})
+	if err != nil {
+		return fmt.Errorf("Unable to marshal data")
+	}
+	body := &icmp.Echo{
+		ID:   p.id,
+		Seq:  p.seq,
+		Data: data,
+	}
+	msg := &icmp.Message{
+		Type: ipv4.ICMPTypeEcho,
+		Code: 0,
+		Body: body,
+	}
+	bytes, err := msg.Marshal(nil)
 	if err != nil {
 		return err
 	}
