@@ -8,8 +8,6 @@ import (
 	"math"
 	"math/rand"
 	"net"
-	"os"
-	"os/signal"
 	"sync"
 	"syscall"
 	"time"
@@ -54,6 +52,10 @@ type Pinger struct {
 
 	// OnFinish is called when Pinger exits
 	OnFinish func(*Stat)
+}
+
+func (p *Pinger) Stop() {
+	close(p.closed)
 }
 
 func (p *Pinger) SetAddr(addr string) error {
@@ -158,17 +160,13 @@ func (p *Pinger) Run() {
 
 	_ = p.sendICMP(conn)
 	interval := time.NewTicker(p.Interval)
-	c := make(chan os.Signal, 1)
-	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	for {
 		select {
-		case <-c:
-			close(p.closed)
 		case <-p.closed:
 			wg.Wait()
 			return
 		case <-ctxTimeout.Done():
-			close(p.closed)
+			p.Stop()
 		case <-interval.C:
 			err = p.sendICMP(conn)
 			if err != nil {
@@ -237,7 +235,7 @@ func (p *Pinger) processPacket(pkt *packet) error {
 	}
 
 	if p.packetRecv == p.Count {
-		close(p.closed)
+		p.Stop()
 	}
 	return nil
 }
@@ -258,7 +256,7 @@ func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet, wg *sync.W
 						// Read timeout
 						continue
 					} else {
-						close(p.closed)
+						p.Stop()
 						return
 					}
 				}
