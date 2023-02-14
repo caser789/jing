@@ -174,6 +174,9 @@ func (p *Pinger) Run() {
 		case <-ctxTimeout.Done():
 			p.Stop()
 		case <-interval.C:
+			if p.Count > 0 && p.Count <= p.stat.PacketsSent {
+				continue
+			}
 			err = p.sendICMP(conn)
 			if err != nil {
 				fmt.Println("FATAL: ", err.Error())
@@ -295,7 +298,7 @@ type IcmpData struct {
 func (p *Pinger) sendICMP(conn *icmp.PacketConn) error {
 	data, err := json.Marshal(IcmpData{Bytes: timeToBytes(time.Now()), Tracker: p.tracker})
 	if err != nil {
-		return fmt.Errorf("Unable to marshal data")
+		return fmt.Errorf("unable to marshal data %s", err)
 	}
 	body := &icmp.Echo{
 		ID:   p.id,
