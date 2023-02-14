@@ -158,12 +158,14 @@ func (p *Pinger) Run() {
 	}
 
 	recv := make(chan *packet, 5)
+	defer close(recv)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go p.recvICMP(conn, recv, &wg)
 
 	_ = p.sendICMP(conn)
 	interval := time.NewTicker(p.Interval)
+	defer interval.Stop()
 	for {
 		select {
 		case <-p.closed:
