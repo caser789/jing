@@ -156,6 +156,11 @@ func (p *Pinger) Run() {
 		fmt.Printf("Error listening for ICMP packets: %s\n", err.Error())
 		return
 	}
+	err = conn.IPv4PacketConn().SetControlMessage(ipv4.FlagTTL, true)
+	if err != nil {
+		fmt.Printf("Error listening for ICMP packets: %s\n", err.Error())
+		return
+	}
 
 	recv := make(chan *packet, 5)
 	defer close(recv)
@@ -193,6 +198,7 @@ func (p *Pinger) Run() {
 type packet struct {
 	bytes  []byte
 	nbytes int
+	ttl    int
 }
 
 func (p *Pinger) processPacket(pkt *packet) error {
@@ -254,6 +260,7 @@ func (p *Pinger) processPacket(pkt *packet) error {
 			IPAddr: p.ipaddr,
 			Nbytes: n,
 			Seq:    echo.Seq,
+			Ttl:    pkt.ttl,
 		})
 	}
 
@@ -272,7 +279,7 @@ func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet, wg *sync.W
 		default:
 			bytesGot := make([]byte, 512)
 			_ = conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
-			n, _, err := conn.ReadFrom(bytesGot)
+			n, cm, _, err := conn.IPv4PacketConn().ReadFrom(bytesGot)
 			if err != nil {
 				if neterr, ok := err.(*net.OpError); ok {
 					if neterr.Timeout() {
@@ -285,7 +292,11 @@ func (p *Pinger) recvICMP(conn *icmp.PacketConn, recv chan<- *packet, wg *sync.W
 				}
 			}
 
-			recv <- &packet{bytes: bytesGot, nbytes: n}
+			var ttl int
+			if cm != nil {
+				ttl = cm.TTL
+			}
+			recv <- &packet{bytes: bytesGot, nbytes: n, ttl: ttl}
 		}
 	}
 }
@@ -347,6 +358,9 @@ type Packet struct {
 
 	// Seq is the ICMP sequence number.
 	Seq int
+
+	// TTL is the TTL on the packet
+	Ttl int
 }
 
 func timeToBytes(t time.Time) []byte {
