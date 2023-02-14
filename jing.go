@@ -23,6 +23,7 @@ func NewPinger(host string) (*Pinger, error) {
 		stat:    &Stat{},
 		network: UDP,
 		closed:  make(chan interface{}),
+		id:      rand.Intn(0xffff),
 	}
 	err := p.SetAddr(host)
 	if err != nil {
@@ -36,6 +37,7 @@ type Pinger struct {
 	addr       string
 	ipaddr     *net.IPAddr
 
+	id     int
 	seq    int
 	stat   *Stat
 	closed chan interface{}
@@ -205,6 +207,10 @@ func (p *Pinger) processPacket(pkt *packet) error {
 		// Very bad, not sure how this can happen
 		return fmt.Errorf("error, invalid ICMP echo reply. Body type: %T, %v", echo, echo)
 	}
+	// Check if reply from same ID
+	if echo.ID != p.id {
+		return nil
+	}
 
 	Rtt := time.Since(bytesToTime(echo.Data[:8]))
 	p.packetRecv++
@@ -267,7 +273,7 @@ func (p *Pinger) sendICMP(conn *icmp.PacketConn) error {
 	bytes, err := (&icmp.Message{
 		Type: ipv4.ICMPTypeEcho, Code: 0,
 		Body: &icmp.Echo{
-			ID:   rand.Intn(65535),
+			ID:   p.id,
 			Seq:  p.seq,
 			Data: timeToBytes(time.Now()),
 		},
