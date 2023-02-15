@@ -144,7 +144,6 @@ func (p *Pinger) Stat() *Stat {
 func (p *Pinger) Run() {
 	ctxTimeout, cancel := context.WithTimeout(context.Background(), p.Timeout)
 	defer cancel()
-	defer p.finish()
 
 	var proto = "ip4:icmp"
 	if p.network == UDP {
@@ -163,18 +162,21 @@ func (p *Pinger) Run() {
 	}
 
 	recv := make(chan *packet, 5)
-	defer close(recv)
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go p.recvICMP(conn, recv, &wg)
 
 	_ = p.sendICMP(conn)
 	interval := time.NewTicker(p.Interval)
-	defer interval.Stop()
+	defer func() {
+		close(recv)
+		interval.Stop()
+		wg.Wait()
+		p.finish()
+	}()
 	for {
 		select {
 		case <-p.closed:
-			wg.Wait()
 			return
 		case <-ctxTimeout.Done():
 			p.Stop()
