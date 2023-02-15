@@ -43,6 +43,7 @@ type Pinger struct {
 	seq     int
 	stat    *Stat
 	closed  chan interface{}
+	lock    sync.Mutex
 
 	packetRecv int
 	network    string
@@ -59,7 +60,18 @@ type Pinger struct {
 }
 
 func (p *Pinger) Stop() {
-	close(p.closed)
+	p.lock.Lock()
+	defer p.lock.Unlock()
+
+	open := true
+	select {
+	case _, open = <-p.closed:
+	default:
+	}
+
+	if open {
+		close(p.closed)
+	}
 }
 
 func (p *Pinger) SetAddr(addr string) error {
